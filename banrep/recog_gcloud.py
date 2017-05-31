@@ -1,7 +1,7 @@
 # coding: utf-8
 """Modulo para transcribir archivo de audio usando Google Cloud Speech. """
+import base64
 import datetime
-import io
 import json
 import logging
 import os
@@ -9,64 +9,52 @@ import sys
 import time
 
 from google.cloud import speech
-import speech_recognition as sr
 
 
-def transcribe_file(speech_file):
-    """Transcribe the given audio file asynchronously."""
+def encode_audio(audiofile):
+    """Codifica contenido de audiofile"""
+    with open(audiofile, 'rb') as af:
+        speech_content = base64.b64encode(af.read())
+
+    return speech_content
+
+
+def transcribe_gcs(urifile):
+    """Transcribe gcs audio file asynchronously."""
     speech_client = speech.Client()
 
-    with io.open(speech_file, 'rb') as audio_file:
-        content = audio_file.read()
-        audio_sample = speech_client.sample(
-            content, encoding='LINEAR16', sample_rate=16000)
+    audio_sample = speech_client.sample(
+        source_uri=urifile,
+        encoding='LINEAR16',
+        sample_rate=16000)
 
-    operation = audio_sample.async_recognize('es-CO',)
+    operation = audio_sample.async_recognize('es-CO')
 
-    retry_count = 100
-    while retry_count > 0 and not operation.complete:
-        retry_count -= 1
+    logging.info('Analizando: {}'.format(urifile))
+
+    while not operation.complete:
         time.sleep(2)
-        operation.poll()
 
-    if not operation.complete:
-        print('Operation not complete and retry limit reached.')
-        return
+        try:
+            operation.poll()
 
-    alternatives = operation.results
-    for alternative in alternatives:
-        print('Transcript: {}'.format(alternative.transcript))
-        print('Confidence: {}'.format(alternative.confidence))
+        except ValueError:
+            logging.info('No hay contenido en {}'.format(urifile))
+            return
+        except Exception as e:
+            logging.info('Error inesperado en {}: {}'.format(urifile, e))
+            return
 
-    return alternatives
-
-
-def audio_transcribe(audio_file, credentials):
-    r = sr.Recognizer()
-
-    with sr.AudioFile(audio_file) as source:
-        audio = r.record(source)
-
-    try:
-        transcript = r.recognize_google_cloud(audio,
-                                              credentials_json=credentials)
-    except sr.UnknownValueError:
-        print("Google Cloud Speech could not understand audio")
-        transcript = ''
-    except sr.RequestError as e:
-        print("Could not request results from Google; {}".format(e))
-        transcript = ''
-
-    return transcript
+    return operation
 
 
 def main():
     """Unificar en main para poder ejecutar despues desde otro script."""
     inicio = time.time()
     dir_input = sys.argv[1]
-    credfile = sys.argv[2]
-
+    dir_output = 'transcriptions'
     dir_logs = 'logs'
+
     os.makedirs(dir_logs, exist_ok=True)
 
     ahora = datetime.datetime.now()
@@ -80,19 +68,34 @@ def main():
                         filename=logfile,
                         filemode='w')
 
-    audiofile = os.path.join(dir_input, 'corto.flac')
+    dirstub = os.path.split(dir_input)[-1]
+    bucket = 'gs://audio-banrep/{}'.format(dirstub)
 
-    # with open('gcloud_result.json', 'w', encoding='utf-8') as fp:
-    #     results = transcribe_file(audiofile)
-    #
-    #     json.dump(results, fp, indent=2, ensure_ascii=False)
+    for filename in os.listdir(dir_input):
+        if filename.endswith('.wav'):
+            urifile = '{}/{}'.format(bucket, filename)
+            filestub = filename.rsplit('.', maxsplit=1)[0]
+            outpath = os.path.join(dir_output, dirstub)
 
-    with open(credfile) as cf:
-        credentials = json.load(cf)
-        credentials = json.dumps(credentials, ensure_ascii=False)
+            os.makedirs(outpath, exist_ok=True)
 
-    transcript = audio_transcribe(audiofile, credentials)
-    print(transcript)
+            outfile = os.path.join(outpath, '{}.json'.format(filestub))
+
+            with open(outfile, 'w', encoding='utf-8') as fp:
+                results = []
+
+                operation = transcribe_gcs(urifile=urifile)
+
+                if operation:
+                    for alternative in operation.results:
+                        transcript = alternative.transcript
+                        confidence = alternative.confidence
+
+                        results.append({'transcript': transcript,
+                                        'confidence': confidence})
+
+                    json.dump({'results': results}, fp, indent=2,
+                              ensure_ascii=False)
 
     time_end = time.time()
     secs = time_end - inicio

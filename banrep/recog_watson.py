@@ -52,7 +52,7 @@ def main():
     os.makedirs(dir_logs, exist_ok=True)
 
     ahora = datetime.datetime.now()
-    corrida = "{:%Y-%m-%d-%H%M%S}".format(ahora)
+    corrida = "{:%Y-%m-%d-%H%M%S}-watson".format(ahora)
     logfile = os.path.join(dir_logs, '{}.log'.format(corrida))
     log_format = '%(asctime)s : %(levelname)s : %(message)s'
     log_datefmt = '%Y-%m-%d %H:%M:%S'
